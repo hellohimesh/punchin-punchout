@@ -58,7 +58,6 @@
         table {
             width: 100%;
             border-collapse: collapse;
-            margin: 1rem 0;
             background: white;
             border-radius: 10px;
             overflow: hidden;
@@ -75,20 +74,82 @@
             background-color: var(--primary);
             color: white;
             font-weight: 500;
+            position: sticky;
+            top: 0;
+            z-index: 2;
         }
 
         tr:nth-child(even) {
             background-color: #f8f9fa;
         }
 
-        #todayLogs div {
+        /* Improved today logs layout */
+        #todayLogs .log-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
             padding: 0.8rem;
             margin: 0.5rem 0;
             background: #f8f9fa;
             border-radius: 8px;
+            gap: 0.5rem;
+        }
+
+        .log-row-left {
             display: flex;
-            justify-content: space-between;
             align-items: center;
+            gap: 1em;
+            min-width: 0;
+        }
+
+        .log-actions {
+            display: flex;
+            align-items: center;
+            gap: 0.2em;
+            flex-shrink: 0;
+        }
+
+        .log-type {
+            font-weight: bold;
+        }
+
+        .log-in {
+            color: #27ae60;
+        }
+
+        .log-out {
+            color: #e74c3c;
+        }
+
+        .edit-btn, .delete-btn {
+            background: none;
+            border: none;
+            color: #888;
+            font-size: 1.2em;
+            cursor: pointer;
+            margin-left: 0.5em;
+        }
+
+        .edit-btn:active, .delete-btn:active {
+            color: #4A90E2;
+        }
+
+        .delete-btn {
+            color: #e74c3c;
+        }
+
+        .save-btn, .cancel-btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 5px;
+            padding: 0.3em 0.8em;
+            margin-left: 0.5em;
+            cursor: pointer;
+            font-size: 1em;
+        }
+        .cancel-btn {
+            background: #aaa;
         }
 
         #status {
@@ -98,9 +159,17 @@
             margin: 1rem 0;
         }
 
+        #historyLogs {
+            max-height: 50vh;
+            overflow-y: auto;
+            margin: 1rem 0;
+            border: 1px solid #eee;
+            border-radius: 10px;
+        }
+
         @media (max-width: 768px) {
             body {
-                padding: 15px;
+                padding: 10px;
             }
 
             h1 {
@@ -113,33 +182,40 @@
                 max-width: 100%;
             }
 
-            table {
-                display: block;
-                overflow-x: auto;
-            }
-
-            th, td {
-                padding: 0.8rem;
-                font-size: 0.9rem;
+            table, th, td {
+                font-size: 0.95rem;
             }
         }
 
         @media (max-width: 480px) {
-            #todayLogs div {
-                flex-direction: column;
-                align-items: flex-start;
+            #todayLogs .log-row {
+                flex-direction: row;
+                align-items: center;
+                padding: 0.7rem;
+                gap: 0.3rem;
+            }
+            .log-row-left {
+                gap: 0.5em;
+            }
+            .log-actions {
+                gap: 0.1em;
+            }
+            .save-btn, .cancel-btn {
+                font-size: 0.95em;
+                padding: 0.2em 0.5em;
             }
         }
     </style>
 </head>
 <body>
-    <h1>Punch Clock</h1>
+    <h1>⏱ Punch Clock</h1>
     <button id="punchBtn">Punch In</button>
     <div id="status">Ready to track your workday!</div>
     
     <div class="card">
         <h2>Today's Logs</h2>
         <div id="todayLogs"></div>
+        <div id="todaySummary" style="margin-top:1em;font-weight:bold;"></div>
     </div>
 
     <div class="card">
@@ -148,83 +224,182 @@
     </div>
 
     <script>
-        const today = new Date().toISOString().split('T')[0];
-        const storageKey = `logs-${today}`;
-        
-        function getLogs() {
-            return JSON.parse(localStorage.getItem(storageKey)) || [];
+        // Utilities
+        function getTodayKey() {
+            const today = new Date();
+            const yyyy = today.getFullYear();
+            const mm = String(today.getMonth() + 1).padStart(2, '0');
+            const dd = String(today.getDate()).padStart(2, '0');
+            return `logs-${yyyy}-${mm}-${dd}`;
         }
 
-        function saveLog(log) {
-            const logs = getLogs();
-            logs.push(log);
-            localStorage.setItem(storageKey, JSON.stringify(logs));
+        function getLogs(key = getTodayKey()) {
+            return JSON.parse(localStorage.getItem(key)) || [];
+        }
+
+        function saveLogs(logs, key = getTodayKey()) {
+            localStorage.setItem(key, JSON.stringify(logs));
             updateDisplay();
         }
 
-        function calculateBreaks(logs) {
+        function saveLog(log) {
+            const key = getTodayKey();
+            const logs = getLogs(key);
+            logs.push(log);
+            saveLogs(logs, key);
+        }
+
+        function calculateBreaks(logs, includeCurrent = false) {
             let breakDuration = 0;
+            const now = new Date();
             for(let i = 0; i < logs.length - 1; i++) {
                 if(logs[i].type === 'out' && logs[i+1].type === 'in') {
                     const diff = new Date(logs[i+1].time) - new Date(logs[i].time);
                     breakDuration += diff;
                 }
             }
+            // If last log is OUT and includeCurrent, add time from last OUT to now
+            if (includeCurrent && logs.length && logs[logs.length-1].type === 'out') {
+                breakDuration += now - new Date(logs[logs.length-1].time);
+            }
             return breakDuration;
         }
 
+        function calculateWorkingHours(logs, includeCurrent = false) {
+            if(logs.length < 1) return 0;
+            const first = new Date(logs[0].time);
+            const now = new Date();
+            let last = new Date(logs[logs.length-1].time);
+            let totalMs;
+            if (includeCurrent && logs[logs.length-1].type === 'in') {
+                totalMs = now - first;
+            } else {
+                totalMs = last - first;
+            }
+            return totalMs - calculateBreaks(logs, includeCurrent);
+        }
+
         function formatDuration(ms) {
+            if(ms <= 0 || isNaN(ms)) return "0h 0m";
             const hours = Math.floor(ms / 3600000);
             const minutes = Math.floor((ms % 3600000) / 60000);
             return `${hours}h ${minutes}m`;
         }
 
+        // State for editing
+        let editingIndex = null;
+
         function updateDisplay() {
+            // Update today's logs and punch button
             const logs = getLogs();
             const lastLog = logs[logs.length - 1];
             const btn = document.getElementById('punchBtn');
-            
             btn.textContent = lastLog?.type === 'in' ? 'Punch Out' : 'Punch In';
-            
-            // Display today's logs
-            const todayLogsHTML = logs.map(log => `
-                <div>${new Date(log.time).toLocaleTimeString()} - ${log.type.toUpperCase()}</div>
-            `).join('');
-            document.getElementById('todayLogs').innerHTML = todayLogsHTML;
 
-            // Display history
+            // Status message
+            const status = document.getElementById('status');
+            if (!logs.length) {
+                status.textContent = "No punches yet today.";
+            } else if (lastLog.type === 'in') {
+                status.textContent = "You are punched in.";
+            } else {
+                status.textContent = "You are punched out.";
+            }
+
+            // Today's logs with edit and delete option, improved layout
+            const todayLogsHTML = logs.map((log, idx) => {
+                if (editingIndex === idx) {
+                    // Editing mode
+                    const logDate = new Date(log.time);
+                    const timeStr = logDate.toISOString().substring(11,16); // "HH:MM"
+                    return `
+                        <div class="log-row">
+                            <div class="log-row-left">
+                                <input type="time" id="edit-time-${idx}" value="${timeStr}" style="font-size:1em;padding:0.2em;">
+                                <span class="log-type ${log.type==='in'?'log-in':'log-out'}">${log.type.toUpperCase()}</span>
+                            </div>
+                            <div class="log-actions">
+                                <button class="save-btn" onclick="saveEdit(${idx})">Save</button>
+                                <button class="cancel-btn" onclick="cancelEdit()">Cancel</button>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    return `
+                        <div class="log-row">
+                            <div class="log-row-left">
+                                <span>${new Date(log.time).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                                <span class="log-type ${log.type==='in'?'log-in':'log-out'}">${log.type.toUpperCase()}</span>
+                            </div>
+                            <div class="log-actions">
+                                <button class="edit-btn" title="Edit Time" onclick="startEdit(${idx})">&#9998;</button>
+                                <button class="delete-btn" title="Delete Punch" onclick="deleteLog(${idx})">&#128465;</button>
+                            </div>
+                        </div>
+                    `;
+                }
+            }).join('');
+            document.getElementById('todayLogs').innerHTML = todayLogsHTML || "<div>No logs for today.</div>";
+
+            // Show today's summary (working hours / breaks)
+            let todaySummary = "";
+            if (logs.length) {
+                if (lastLog.type === 'in') {
+                    todaySummary = `Working: <span style="color:#27ae60">${formatDuration(calculateWorkingHours(logs, true))}</span> (including current session)`;
+                } else {
+                    todaySummary = `On Break: <span style="color:#e74c3c">${formatDuration(calculateBreaks(logs, true))}</span> (including current break)`;
+                }
+            }
+            document.getElementById('todaySummary').innerHTML = todaySummary;
+
+            // History
             const history = [];
             for(let i = 0; i < localStorage.length; i++) {
                 const key = localStorage.key(i);
-                console.log(key);
                 if(key.startsWith('logs-')) {
+                    const dateStr = key.replace('logs-', ''); // YYYY-MM-DD
                     history.push({
-                        date: `${key.split('-')[3]}-${key.split('-')[2]}-${key.split('-')[1]}`,
-                        logs: JSON.parse(localStorage.getItem(key))
+                        date: dateStr,
+                        logs: JSON.parse(localStorage.getItem(key)),
+                        isToday: key === getTodayKey()
                     });
                 }
             }
-            
+            // Sort latest date first
             history.sort((a, b) => b.date.localeCompare(a.date));
-                console.log(history,"history");
+
             const historyHTML = `
                 <table>
-                    <tr>
-                        <th>Date</th>
-                        <th>First Punch</th>
-                        <th>Last Punch</th>
-                        <th>Total Breaks</th>
-                        <th>Total Entries</th>
-                    </tr>
-                    ${history.map(entry => `
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Working Hours</th>
+                            <th>Total Breaks</th>
+                            <th>First Punch</th>
+                            <th>Last Punch</th>
+                            <th>Entries</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    ${history.map(entry => {
+                        let working = entry.isToday
+                            ? formatDuration(calculateWorkingHours(entry.logs, true))
+                            : formatDuration(calculateWorkingHours(entry.logs, false));
+                        let breaks = entry.isToday
+                            ? formatDuration(calculateBreaks(entry.logs, true))
+                            : formatDuration(calculateBreaks(entry.logs, false));
+                        return `
                         <tr>
                             <td>${entry.date}</td>
-                            <td>${new Date(entry.logs[0].time).toLocaleTimeString()}</td>
-                            <td>${new Date(entry.logs[entry.logs.length-1].time).toLocaleTimeString()}</td>
-                            <td>${formatDuration(calculateBreaks(entry.logs))}</td>
+                            <td>${working}</td>
+                            <td>${breaks}</td>
+                            <td>${entry.logs.length>0 ? new Date(entry.logs[0].time).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '-'}</td>
+                            <td>${entry.logs.length>0 ? new Date(entry.logs[entry.logs.length-1].time).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '-'}</td>
                             <td>${entry.logs.length}</td>
                         </tr>
-                    `).join('')}
+                        `;
+                    }).join('')}
+                    </tbody>
                 </table>`;
             document.getElementById('historyLogs').innerHTML = historyHTML;
         }
@@ -238,7 +413,56 @@
             saveLog(newLog);
         });
 
+        // Editing logic
+        window.startEdit = function(idx) {
+            editingIndex = idx;
+            updateDisplay();
+            setTimeout(() => {
+                const input = document.getElementById(`edit-time-${idx}`);
+                if (input) input.focus();
+            }, 100);
+        };
+
+        window.cancelEdit = function() {
+            editingIndex = null;
+            updateDisplay();
+        };
+
+        window.saveEdit = function(idx) {
+            const input = document.getElementById(`edit-time-${idx}`);
+            if (!input) return;
+            const newTime = input.value; // "HH:MM"
+            if (!/^\d{2}:\d{2}$/.test(newTime)) {
+                alert("Invalid time format!");
+                return;
+            }
+            const logs = getLogs();
+            const oldDate = new Date(logs[idx].time);
+            // Set new time but keep same date
+            const [h, m] = newTime.split(':');
+            oldDate.setHours(Number(h));
+            oldDate.setMinutes(Number(m));
+            oldDate.setSeconds(0);
+            oldDate.setMilliseconds(0);
+            logs[idx].time = oldDate.toISOString();
+            saveLogs(logs);
+            editingIndex = null;
+        };
+
+        // Delete logic
+        window.deleteLog = function(idx) {
+            if (!confirm("Are you sure you want to delete this punch?")) return;
+            const logs = getLogs();
+            logs.splice(idx, 1);
+            saveLogs(logs);
+            if (editingIndex === idx) editingIndex = null;
+        };
+
+        // Initial display
         updateDisplay();
-    </script>>
+
+        // Optional: live update every minute for current session
+        setInterval(updateDisplay, 60000);
+    </script>
 </body>
 </html>
